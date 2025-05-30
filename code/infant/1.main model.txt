@@ -1,0 +1,421 @@
+source("scripts/helper_functions.R")
+data <- readxl::read_excel("C:/Users/DELL/Desktop/f11.xlsx")
+
+# Define helper function
+add.alpha <- function(col, alpha=1) {
+  apply(sapply(col, col2rgb)/255, 2, 
+        function(x) rgb(x[1], x[2], x[3], alpha))
+}
+
+# Create output directory (if doesn't exist)
+dir.create("C:/Users/DELL/Desktop/pic", showWarnings = FALSE)
+
+# Define model components - unchanging
+regression_controls <- "Education + Birthorder + Twin + hospital +electricity+ Sex + Hurt + Placeresidence + RH + ozone + Tem + Age + NDVI + Wealth + Water + Toilet + cookingfuel"
+regression_fixed_effects <- "Name + fseason + ftime"
+regression_var_cluster <- "floc"
+
+# Determine actual PM2.5 range
+pm25_min <- min(data$PM2.5, na.rm = TRUE)
+pm25_max <- max(data$PM2.5, na.rm = TRUE)
+pm25_mean <- mean(data$PM2.5, na.rm = TRUE)
+print(paste("PM2.5 range:", pm25_min, "to", pm25_max, "mean:", pm25_mean))
+
+# Determine actual PM2.5 quantile range (1% to 99%)
+pm25_q01 <- quantile(data$PM2.5, 0.01, na.rm = TRUE)
+pm25_q99 <- quantile(data$PM2.5, 0.99, na.rm = TRUE)
+print(paste("PM2.5 quantile range (1%-99%):", pm25_q01, "to", pm25_q99))
+
+# Set x-axis range variables - fixing "object 'x_min' not found" error
+x_min <- floor(pm25_q01)
+x_max <- ceiling(pm25_q99)
+x_breaks <- seq(x_min, x_max, by = 20)
+
+# Create support range based on actual range
+pm25_support <- seq(x_min, x_max, length.out = 100)
+
+################################
+#### Main Effect Analysis - Linear Model
+################################
+
+# Equation setup - PM2.5 exposure modeled only as linear term
+equation_1 <- as.formula(paste("Y ~ PM2.5 + ", 
+                               regression_controls, "|", regression_fixed_effects, "| 0 |", regression_var_cluster, sep = ""))
+
+# Run model
+main_model <- lfe::felm(equation_1, data = data)
+summary_model <- summary(main_model)
+print(summary_model)
+
+# Get PM2.5 coefficient and standard error
+pm25_coef <- coef(main_model)["PM2.5"]
+pm25_se <- summary_model$coefficients["PM2.5", "Cluster s.e."]
+
+# Generate predicted values for different PM2.5 values
+predicted_values <- pm25_coef * pm25_support
+
+# Generate confidence intervals
+ci_low <- predicted_values - 1.96 * pm25_se * pm25_support
+ci_high <- predicted_values + 1.96 * pm25_se * pm25_support
+
+# Create dataframe for plotting
+plot_data <- data.frame(
+  x = pm25_support,
+  y = predicted_values,
+  ci_low = ci_low,
+  ci_high = ci_high
+)
+
+# Print summary of the model for comparison
+summary_model <- summary(main_model)
+print(summary_model)
+
+################################
+#### Create split chart, improved style with better legend
+################################
+
+# Update color scheme - using blue-pink tones
+main_line_color <- "#3377bb"       # Medium blue main line
+ci_fill_color <- "#99ccee"         # Light blue confidence interval
+hist_fill_color <- "#99ccee"       # Consistent blue color
+grid_color <- "#e6e6e6"            # Lighter grid line color
+text_color <- "#333333"            # Dark gray text color
+
+# Air quality standard colors - UPDATED THRESHOLDS
+excellent_color <- "#8ecae6"       # Excellent line - Blue
+polluted_color <- "#ffb5c2"        # Polluted line - Pink
+
+# Define better background colors for regions with increased opacity for visibility
+good_bg_color <- add.alpha("#e6f2ff", 0.3)     # Light blue background for Good
+fair_bg_color <- add.alpha("#f0f7ff", 0.2)     # Very light blue background for Fair
+poor_bg_color <- add.alpha("#fff0f5", 0.2)     # Light pink background for Poor
+
+# UPDATED: PM2.5 thresholds
+excellent_limit <- 25  # Good/Fair threshold
+good_limit <- 50       # Fair/Poor threshold
+
+# Determine chart size and layout parameters - apply golden ratio
+layout_heights <- c(0.618, 0.382)  # Golden ratio
+
+# Create PNG image
+png(filename = "C:/Users/DELL/Desktop/pic/PM25_Effect_Bootstrap.png", 
+    width = 10, height = 8, units = "in", res = 300)
+
+# Set layout
+layout(matrix(c(1,2), nrow = 2, byrow = TRUE), heights = layout_heights)
+
+# Set plot parameters - upper graph
+par(mar = c(0, 5, 4, 2), cex.axis = 1.1, cex.lab = 1.2, family = "sans")
+
+# Upper graph: Direct impact of PM2.5 on infant mortality
+y_min <- min(0, min(plot_data$ci_low) * 1.05)
+y_max <- max(plot_data$ci_high) * 1.1
+
+plot(plot_data$x, plot_data$y, type = 'n', 
+     ylim = c(y_min, y_max),
+     xlim = c(x_min, x_max),
+     xlab = "", ylab = "", axes = FALSE)
+
+# Add air quality region background
+rect(par("usr")[1], par("usr")[3], excellent_limit, par("usr")[4], 
+     col = good_bg_color, border = NA)
+rect(excellent_limit, par("usr")[3], good_limit, par("usr")[4], 
+     col = fair_bg_color, border = NA)
+rect(good_limit, par("usr")[3], par("usr")[2], par("usr")[4], 
+     col = poor_bg_color, border = NA)
+
+# Add grid lines
+grid_y <- pretty(c(y_min, y_max), n = 6)
+abline(h = grid_y, col = grid_color, lty = 3, lwd = 0.8)
+abline(v = x_breaks, col = grid_color, lty = 3, lwd = 0.8)
+
+# Add reference lines
+abline(h = 0, col = "gray40", lty = 2, lwd = 1.2)
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Add confidence interval
+polygon_x <- c(plot_data$x, rev(plot_data$x))
+polygon_y <- c(plot_data$ci_low, rev(plot_data$ci_high))
+polygon(polygon_x, polygon_y, col = add.alpha(ci_fill_color, 0.2), border = NA)
+
+# Draw main curve
+lines(plot_data$x, plot_data$y, lwd = 2.5, col = main_line_color)
+
+# Add Y axis
+axis(2, at = grid_y, 
+     labels = format(grid_y * 1000, scientific = FALSE, trim = TRUE), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Infant Mortality Change (per 1,000 newborns)", side = 2, line = 3.5, cex = 1.2, col = text_color)
+
+# Add title with bootstrap method noted
+mtext("Effect of PM2.5 on Infant Mortality ", side = 3, line = 1, cex = 1.5, font = 2, col = text_color)
+
+# IMPROVED LEGEND: Horizontal color bar in top-right corner WITHOUT border
+# Calculate dimensions for the color bar (positioned in top-right)
+gradient_height <- 0.06 * (y_max - y_min)  # Slightly taller for better visibility
+gradient_y_pos <- y_max - gradient_height * 1.5  # Position near top of plot
+
+# Calculate the width to be around 35% of the plot width
+gradient_width <- (x_max - x_min) * 0.35  
+
+# Position it in the top-right area (leaving margin from the edge)
+gradient_x_start <- x_max - gradient_width - (x_max - x_min) * 0.05  
+
+# Draw the color bar with three distinct regions - KEEP THIN BORDERS BETWEEN REGIONS
+rect(gradient_x_start, gradient_y_pos, 
+     gradient_x_start + gradient_width/3, gradient_y_pos + gradient_height, 
+     col = add.alpha("#e6f2ff", 0.7), border = "gray80")  # Good region
+rect(gradient_x_start + gradient_width/3, gradient_y_pos, 
+     gradient_x_start + 2*gradient_width/3, gradient_y_pos + gradient_height, 
+     col = add.alpha("#f0f7ff", 0.7), border = "gray80")  # Fair region
+rect(gradient_x_start + 2*gradient_width/3, gradient_y_pos, 
+     gradient_x_start + gradient_width, gradient_y_pos + gradient_height, 
+     col = add.alpha("#fff0f5", 0.7), border = "gray80")  # Poor region
+
+# Add text labels for each region
+text(gradient_x_start + gradient_width/6, gradient_y_pos + gradient_height*1.5, 
+     "Good", cex = 0.85, col = text_color)
+text(gradient_x_start + gradient_width/6, gradient_y_pos - gradient_height*0.5, 
+     "<25 μg/m³", cex = 0.85, col = text_color)
+
+text(gradient_x_start + gradient_width/2, gradient_y_pos + gradient_height*1.5, 
+     "Fair", cex = 0.85, col = text_color)
+text(gradient_x_start + gradient_width/2, gradient_y_pos - gradient_height*0.5, 
+     "25-50 μg/m³", cex = 0.85, col = text_color)
+
+text(gradient_x_start + 5*gradient_width/6, gradient_y_pos + gradient_height*1.5, 
+     "Poor", cex = 0.85, col = text_color)
+text(gradient_x_start + 5*gradient_width/6, gradient_y_pos - gradient_height*0.5, 
+     ">50 μg/m³", cex = 0.85, col = text_color)
+
+# Add vertical threshold lines with the correct colors
+segments(gradient_x_start + gradient_width/3, gradient_y_pos - gradient_height*0.5,
+         gradient_x_start + gradient_width/3, gradient_y_pos + gradient_height*1.5,
+         col = excellent_color, lty = 2, lwd = 1.5)
+segments(gradient_x_start + 2*gradient_width/3, gradient_y_pos - gradient_height*0.5,
+         gradient_x_start + 2*gradient_width/3, gradient_y_pos + gradient_height*1.5,
+         col = polluted_color, lty = 2, lwd = 1.5)
+
+# Lower graph: PM2.5 frequency distribution histogram
+par(mar = c(4.5, 5, 0.5, 2))
+
+# First filter PM2.5 data with the same display range as the upper chart
+pm25_filtered <- data$PM2.5[data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+
+# Find the actual minimum and maximum values of the filtered data
+actual_min <- min(pm25_filtered, na.rm = TRUE)
+actual_max <- max(pm25_filtered, na.rm = TRUE)
+
+# Create safe histogram intervals to ensure full coverage of data range
+buffer <- 0.001
+safe_min <- floor(actual_min - buffer)
+safe_max <- ceiling(actual_max + buffer)
+
+# Create histogram intervals corresponding to the upper chart
+hist_breaks <- c(seq(safe_min, safe_max, by = 2))
+if (max(hist_breaks) < safe_max) {
+  hist_breaks <- c(hist_breaks, safe_max)
+}
+
+# Create histogram using safe intervals
+hist_result <- hist(pm25_filtered, breaks = hist_breaks, plot = FALSE)
+hist_percent <- hist_result$counts / sum(hist_result$counts) * 100
+
+# Key point: Ensure the x-axis range of the lower histogram matches the upper one exactly
+plot(1, 1, type = "n", 
+     xlim = c(x_min, x_max), 
+     ylim = c(0, max(hist_percent) * 1.2), 
+     xlab = "", ylab = "", axes = FALSE)
+
+# Display the full x-axis range in the plotting area
+usr <- par("usr")
+rect(usr[1], usr[3], usr[2], usr[4], col = "white", border = NA)
+
+# Add background colors to histogram matching the upper chart
+rect(x_min, 0, excellent_limit, max(hist_percent) * 1.2,
+     col = good_bg_color, border = NA)
+rect(excellent_limit, 0, good_limit, max(hist_percent) * 1.2,
+     col = fair_bg_color, border = NA)
+rect(good_limit, 0, x_max, max(hist_percent) * 1.2,
+     col = poor_bg_color, border = NA)
+
+# Add bar chart, control width to ensure complete display
+for(i in 1:length(hist_percent)) {
+  # Only draw bars within the xlim range
+  if(hist_breaks[i] <= x_max && hist_breaks[i+1] >= x_min) {
+    rect(hist_breaks[i], 0, hist_breaks[i+1], hist_percent[i], 
+         col = add.alpha(hist_fill_color, 0.7), 
+         border = add.alpha("gray80", 0.5))
+  }
+}
+
+# Extend x-axis ticks to ensure they include 105 and higher values
+extended_x_breaks <- x_breaks
+if(max(extended_x_breaks) < x_max) {
+  last_break <- max(extended_x_breaks)
+  steps_needed <- ceiling((x_max - last_break) / 20)
+  
+  if(steps_needed > 0) {
+    additional_breaks <- numeric(steps_needed)
+    for(i in 1:steps_needed) {
+      additional_breaks[i] <- last_break + (i * 20)
+    }
+    extended_x_breaks <- c(extended_x_breaks, additional_breaks)
+  }
+}
+
+# Add x-axis ticks
+axis(1, at = extended_x_breaks, labels = extended_x_breaks, col.axis = text_color, col = "gray70")
+mtext("PM2.5 Concentration (μg/m³)", side = 1, line = 3, cex = 1.2, col = text_color)
+
+# Add air quality standard lines
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Add mean line (only consider the mean of filtered data)
+pm25_filtered_mean <- mean(pm25_filtered, na.rm = TRUE)
+abline(v = pm25_filtered_mean, col = "gray30", lty = 1, lwd = 1.5)
+
+# Add Y axis - with line break for "Sample Distribution Frequency (%)"
+y_ticks <- pretty(c(0, max(hist_percent)), n = 5)
+axis(2, at = y_ticks, labels = paste0(format(y_ticks, digits = 1), "%"), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Sample Distribution\nFrequency (%)", side = 2, line = 2.8, cex = 1.2, col = text_color)
+
+# Add mean annotation
+text(pm25_filtered_mean, max(hist_percent) * 0.8, 
+     sprintf("Mean: %.1f", pm25_filtered_mean), 
+     cex = 0.9, col = text_color)
+
+# Add a small blank area on the right side of the chart to ensure the x-axis is fully displayed
+box(col = "gray70")
+
+dev.off()
+
+
+
+
+################################
+#### 导出模型结果到表格 - 完整版
+################################
+
+# 确保输出目录存在
+model_dir <- "C:/Users/DELL/Desktop/pic/model_tables"
+dir.create(model_dir, showWarnings = FALSE, recursive = TRUE)
+
+# 1. 创建回归结果的数据框
+regression_results <- data.frame(
+  Variable = rownames(summary_model$coefficients),
+  Estimate = summary_model$coefficients[, 1],
+  Std_Error = summary_model$coefficients[, 2],
+  t_value = summary_model$coefficients[, 3],
+  p_value = summary_model$coefficients[, 4]
+)
+
+# 添加显著性星号标记
+regression_results$Significance <- ""
+regression_results$Significance[regression_results$p_value < 0.1] <- "."
+regression_results$Significance[regression_results$p_value < 0.05] <- "*"
+regression_results$Significance[regression_results$p_value < 0.01] <- "**"
+regression_results$Significance[regression_results$p_value < 0.001] <- "***"
+
+# 2. 添加模型统计量
+model_stats <- data.frame(
+  Variable = c("R-squared", "Adj. R-squared", "Num. observations", "RMSE"),
+  Value = c(
+    summary_model$r.squared,
+    1 - (1 - summary_model$r.squared) * ((nrow(data) - 1) / (nrow(data) - length(coefficients(main_model)))),
+    summary_model$N,
+    sqrt(mean(residuals(main_model)^2, na.rm = TRUE))
+  )
+)
+
+# 3. PM2.5 统计信息表
+pm25_stats <- data.frame(
+  Statistic = c("最小值", "最大值", "平均值", "1% 分位数", "99% 分位数", "过滤后平均值"),
+  Value = c(pm25_min, pm25_max, pm25_mean, pm25_q01, pm25_q99, pm25_filtered_mean)
+)
+
+# 4. 直方图数据表
+hist_data <- data.frame(
+  breaks_lower = hist_breaks[-length(hist_breaks)],
+  breaks_upper = hist_breaks[-1],
+  counts = hist_result$counts,
+  percent = hist_percent
+)
+
+# 5. 导出表格 - 检查是否已安装writexl包
+if(!require(writexl)) {
+  install.packages("writexl")
+  library(writexl)
+}
+
+# 导出各个表格
+
+# 回归系数表
+write.csv(regression_results, file = file.path(model_dir, "regression_coefficients.csv"), row.names = FALSE)
+
+# 模型统计量表
+write.csv(model_stats, file = file.path(model_dir, "model_statistics.csv"), row.names = FALSE)
+
+# PM2.5统计信息表
+write.csv(pm25_stats, file = file.path(model_dir, "pm25_statistics.csv"), row.names = FALSE)
+
+# 直方图数据表
+write.csv(hist_data, file = file.path(model_dir, "histogram_data.csv"), row.names = FALSE)
+
+# Bootstrap结果数据表
+write.csv(plot_data, file = file.path(model_dir, "bootstrap_results.csv"), row.names = FALSE)
+
+# 6. 合并到一个Excel文件的不同工作表中
+combined_results <- list(
+  "回归系数" = regression_results,
+  "模型统计量" = model_stats,
+  "PM2.5统计信息" = pm25_stats,
+  "PM2.5效应值" = plot_data,
+  "直方图数据" = hist_data
+)
+write_xlsx(combined_results, path = file.path(model_dir, "模型结果完整报告.xlsx"))
+
+# 7. 还可以导出一个格式化的HTML表格，方便直接查看或插入到文档中
+if(!require(htmlTable)) {
+  install.packages("htmlTable")
+  library(htmlTable)
+}
+
+# 为回归系数创建美观的HTML表格
+html_table <- htmlTable(
+  regression_results,
+  caption = "PM2.5对婴儿死亡率的影响 - 回归系数",
+  rnames = FALSE,
+  css.cell = "padding: 8px;",
+  css.table = "margin: 15px;",
+  col.rgroup = c("#F7F7F7", "#FFFFFF")
+)
+
+# 保存HTML表格到文件
+html_file <- file.path(model_dir, "regression_table.html")
+cat("<html><head><meta charset='UTF-8'><style>body{font-family:Arial;}</style></head><body>", file = html_file)
+cat(html_table, file = html_file, append = TRUE)
+cat("</body></html>", file = html_file, append = TRUE)
+
+# 8. 导出模型预测的数据点(用于绘图软件中重现图表)
+predict_data <- data.frame(
+  PM25_level = pm25_support,
+  Mortality_effect = plot_data$y,
+  CI_lower = plot_data$ci_low,
+  CI_upper = plot_data$ci_high
+)
+write.csv(predict_data, file = file.path(model_dir, "prediction_data.csv"), row.names = FALSE)
+
+# 打印完成信息
+cat("\n所有模型结果已导出为表格格式，保存在:", model_dir, "\n")
+cat("主要文件包括:\n")
+cat("- 模型结果完整报告.xlsx (包含所有结果的Excel文件)\n")
+cat("- regression_coefficients.csv (回归系数)\n")
+cat("- model_statistics.csv (模型统计量)\n")
+cat("- bootstrap_results.csv (Bootstrap结果)\n")
+cat("- regression_table.html (格式化的HTML表格)\n")
+
+

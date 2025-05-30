@@ -1,0 +1,465 @@
+source("scripts/helper_functions.R")
+data <- readxl::read_excel("C:/Users/DELL/Desktop/f11.xlsx")
+
+# Define helper function
+add.alpha <- function(col, alpha=1) {
+  apply(sapply(col, col2rgb)/255, 2, 
+        function(x) rgb(x[1], x[2], x[3], alpha))
+}
+
+# Create output directory (if doesn't exist)
+dir.create("C:/Users/DELL/Desktop/pic", showWarnings = FALSE)
+
+# Define model components - unchanging
+regression_controls <- "Education + Birthorder + Twin+ electricity + hospital + Sex + Hurt + Placeresidence + RH + ozone + Tem + Age + NDVI + Wealth + Water + Toilet"  # Remove cookingfuel as control variable
+regression_fixed_effects <- "Name + fseason + ftime"
+regression_var_cluster <- "floc"
+
+# Ensure cookingfuel is a factor variable for easier interpretation
+data$cookingfuel <- factor(data$cookingfuel, 
+                           levels = c(1, 2, 3), 
+                           labels = c("Clean", "Conventional", "Unclean"))
+
+# Print frequency table for cookingfuel
+cat("Cooking fuel type distribution:\n")
+print(table(data$cookingfuel))
+
+# Determine PM2.5 actual range
+pm25_min <- min(data$PM2.5, na.rm = TRUE)
+pm25_max <- max(data$PM2.5, na.rm = TRUE)
+pm25_mean <- mean(data$PM2.5, na.rm = TRUE)
+print(paste("PM2.5 range:", pm25_min, "to", pm25_max, "mean:", pm25_mean))
+
+# Determine actual PM2.5 quantile range (1% to 99%)
+pm25_q01 <- quantile(data$PM2.5, 0.01, na.rm = TRUE)
+pm25_q99 <- quantile(data$PM2.5, 0.99, na.rm = TRUE)
+print(paste("PM2.5 quantile range (1%-99%):", pm25_q01, "to", pm25_q99))
+
+# Set x-axis range variables
+x_min <- floor(pm25_q01)
+x_max <- ceiling(pm25_q99)
+x_breaks <- seq(x_min, x_max, by = 20)
+
+# Create support range based on actual range
+pm25_support <- seq(x_min, x_max, length.out = 100)
+
+################################
+#### Interaction Effect Analysis
+################################
+
+# Create interaction term between PM2.5 and cooking fuel
+# Using Clean fuel (1) as reference group
+equation_interaction <- as.formula(paste(
+  "Y ~ PM2.5 + cookingfuel + PM2.5:cookingfuel + ", 
+  regression_controls, "|", regression_fixed_effects, "| 0 |", regression_var_cluster, sep = ""))
+
+# Run interaction effect model
+interaction_model <- lfe::felm(equation_interaction, data = data)
+summary_interaction <- summary(interaction_model)
+print(summary_interaction)
+
+# Save results to file
+sink("C:/Users/DELL/Desktop/pic/PM25_CookingFuel_Interaction_Results.txt")
+print("PM2.5 and Cooking Fuel Interaction Model Results:")
+print(summary_interaction)
+sink()
+
+# Extract coefficients for prediction
+# Base effect (PM2.5 effect for Clean fuel group)
+base_pm25_effect <- coef(interaction_model)["PM2.5"]
+# Additional PM2.5 effect for Conventional fuel group relative to Clean
+Conventional_interaction <- coef(interaction_model)["PM2.5:cookingfuelConventional"]
+# Additional PM2.5 effect for Unclean fuel group relative to Clean
+Unclean_interaction <- coef(interaction_model)["PM2.5:cookingfuelUnclean"]
+
+# Calculate PM2.5 effects for different fuel groups
+pm25_effect_clean <- base_pm25_effect
+pm25_effect_Conventional <- base_pm25_effect + Conventional_interaction
+pm25_effect_Unclean <- base_pm25_effect + Unclean_interaction
+
+# Get standard errors and covariance for confidence interval calculation
+vcov_matrix <- vcov(interaction_model)
+
+# Calculate standard errors for each group
+# Clean fuel group - directly from PM2.5 standard error
+se_clean <- summary_interaction$coefficients["PM2.5", "Cluster s.e."]
+
+# Calculate standard error for Conventional fuel group (considering covariance)
+# Var(a+b) = Var(a) + Var(b) + 2*Cov(a,b)
+var_pm25 <- se_clean^2
+var_Conventional_int <- summary_interaction$coefficients["PM2.5:cookingfuelConventional", "Cluster s.e."]^2
+cov_pm25_Conventional <- vcov_matrix["PM2.5", "PM2.5:cookingfuelConventional"]
+se_Conventional <- sqrt(var_pm25 + var_Conventional_int + 2*cov_pm25_Conventional)
+
+# Calculate standard error for Unclean fuel group
+var_Unclean_int <- summary_interaction$coefficients["PM2.5:cookingfuelUnclean", "Cluster s.e."]^2
+cov_pm25_Unclean <- vcov_matrix["PM2.5", "PM2.5:cookingfuelUnclean"]
+se_Unclean <- sqrt(var_pm25 + var_Unclean_int + 2*cov_pm25_Unclean)
+
+# Generate predicted values and confidence intervals for different fuel types
+# Clean fuel group
+predicted_clean <- pm25_effect_clean * pm25_support
+ci_low_clean <- predicted_clean - 1.96 * se_clean * pm25_support
+ci_high_clean <- predicted_clean + 1.96 * se_clean * pm25_support
+
+# Conventional fuel group
+predicted_Conventional <- pm25_effect_Conventional * pm25_support
+ci_low_Conventional <- predicted_Conventional - 1.96 * se_Conventional * pm25_support
+ci_high_Conventional <- predicted_Conventional + 1.96 * se_Conventional * pm25_support
+
+# Unclean fuel group
+predicted_Unclean <- pm25_effect_Unclean * pm25_support
+ci_low_Unclean <- predicted_Unclean - 1.96 * se_Unclean * pm25_support
+ci_high_Unclean <- predicted_Unclean + 1.96 * se_Unclean * pm25_support
+
+################################
+#### Create PM2.5 and Fuel Type Interaction Chart - Fixed Version
+################################
+
+# Update color scheme
+clean_color <- "#3377bb"      # Blue - Clean fuel
+Conventional_color <- "#66aa66"   # Green - Conventional fuel
+Unclean_color <- "#ee7766"      # Red - Unclean fuel
+grid_color <- "#e6e6e6"       # Grid line color
+text_color <- "#333333"       # Text color
+
+# Air quality standard colors
+excellent_color <- "#8ecae6"  # Excellent - Light blue
+good_color <- "#219ebc"       # Good - Dark blue
+polluted_color <- "#ffb5c2"   # Polluted - Pink
+
+# Create PNG image
+png(filename = "C:/Users/DELL/Desktop/pic/PM25_CookingFuel_Interaction_Fixed.png", 
+    width = 10, height = 8, units = "in", res = 300)
+
+# Set layout - Interaction effects on top, PM2.5 distribution below
+layout(matrix(c(1,2), nrow = 2, byrow = TRUE), heights = c(0.618, 0.382))
+
+# Set plot parameters - upper graph
+par(mar = c(0, 5, 4, 2), cex.axis = 1.1, cex.lab = 1.2, family = "sans")
+
+# Determine Y-axis range - combine all predicted values and add margin
+y_values <- c(ci_low_clean, ci_high_clean, 
+              ci_low_Conventional, ci_high_Conventional, 
+              ci_low_Unclean, ci_high_Unclean)
+y_min <- min(0, min(y_values) * 1.05)  # Ensure 0 is included
+y_max <- max(y_values) * 1.1
+
+# Upper graph: Impact of PM2.5 & cooking fuel interaction on infant mortality
+plot(pm25_support, predicted_clean, type = 'n', 
+     ylim = c(y_min, y_max),
+     xlim = c(x_min, x_max),
+     xlab = "", ylab = "", axes = FALSE, 
+     main = "") # Empty title, will add manually later
+
+# Add air quality region background
+excellent_limit <- 25  # Changed from 35 to 25
+good_limit <- 50       # Changed from 75 to 50
+
+rect(par("usr")[1], par("usr")[3], excellent_limit, par("usr")[4], 
+     col = add.alpha("#e6f2ff", 0.3), border = NA)
+rect(excellent_limit, par("usr")[3], good_limit, par("usr")[4], 
+     col = add.alpha("#f0f7ff", 0.2), border = NA)
+rect(good_limit, par("usr")[3], par("usr")[2], par("usr")[4], 
+     col = add.alpha("#fff0f5", 0.2), border = NA)
+
+# Add grid lines
+grid_y <- pretty(c(y_min, y_max), n = 6)
+abline(h = grid_y, col = grid_color, lty = 3, lwd = 0.8)
+abline(v = x_breaks, col = grid_color, lty = 3, lwd = 0.8)
+
+# Add reference lines
+abline(h = 0, col = "gray40", lty = 2, lwd = 1.2)
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Plot confidence intervals and lines for each fuel type
+
+# Clean fuel group
+polygon(c(pm25_support, rev(pm25_support)), 
+        c(ci_low_clean, rev(ci_high_clean)), 
+        col = add.alpha(clean_color, 0.15), border = NA)
+lines(pm25_support, predicted_clean, lwd = 2.5, col = clean_color)
+
+# Conventional fuel group
+polygon(c(pm25_support, rev(pm25_support)), 
+        c(ci_low_Conventional, rev(ci_high_Conventional)), 
+        col = add.alpha(Conventional_color, 0.15), border = NA)
+lines(pm25_support, predicted_Conventional, lwd = 2.5, col = Conventional_color, lty = 2)
+
+# Unclean fuel group
+polygon(c(pm25_support, rev(pm25_support)), 
+        c(ci_low_Unclean, rev(ci_high_Unclean)), 
+        col = add.alpha(Unclean_color, 0.15), border = NA)
+lines(pm25_support, predicted_Unclean, lwd = 2.5, col = Unclean_color, lty = 4)
+
+# Add Y axis
+axis(2, at = grid_y, 
+     labels = format(grid_y * 1000, scientific = FALSE, trim = TRUE), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Infant Mortality Change (per 1,000 newborns)", side = 2, line = 3.5, cex = 1.2, col = text_color)
+
+# Add title
+mtext("Impact of PM2.5 and Cooking Fuel Type on Infant Mortality", side = 3, line = 1, cex = 1.5, font = 2, col = text_color)
+
+# Fixed legend - only include fuel types as requested (remove air quality categories)
+legend_x <- "topleft"  # can be "topleft", "topright", "bottomleft", "bottomright"
+legend_items <- c("Clean Fuel", "Conventional Fuel", "Unclean Fuel")
+legend_colors <- c(clean_color, Conventional_color, Unclean_color)
+legend_lty <- c(1, 2, 4)
+legend_lwd <- c(2.5, 2.5, 2.5)
+
+# Add legend with higher background transparency
+legend(legend_x, legend = legend_items, 
+       col = legend_colors, lty = legend_lty, lwd = legend_lwd,
+       bg = add.alpha("white", 0.85), # Increase background transparency
+       box.col = "gray80", 
+       cex = 0.9, 
+       text.col = text_color,
+       pt.cex = 1.2,     # Increase legend point size
+       seg.len = 1.5,    # Increase legend line segment length
+       x.intersp = 0.8,  # Adjust horizontal spacing
+       y.intersp = 1.2)  # Adjust vertical spacing
+
+# Lower graph: PM2.5 frequency distribution histogram
+par(mar = c(4.5, 5, 0.5, 2))
+
+# Filter PM2.5 data within valid range
+pm25_filtered <- data$PM2.5[data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+
+# PM2.5 distribution by fuel type
+pm25_clean <- data$PM2.5[data$cookingfuel == "Clean" & data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+pm25_Conventional <- data$PM2.5[data$cookingfuel == "Conventional" & data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+pm25_Unclean <- data$PM2.5[data$cookingfuel == "Unclean" & data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+
+# Find actual min and max of all data
+actual_min <- min(pm25_filtered, na.rm = TRUE)
+actual_max <- max(pm25_filtered, na.rm = TRUE)
+
+# Create histogram intervals
+buffer <- 0.001
+safe_min <- floor(actual_min - buffer)
+safe_max <- ceiling(actual_max + buffer)
+hist_breaks <- c(seq(safe_min, safe_max, by = 2))
+if (max(hist_breaks) < safe_max) {
+  hist_breaks <- c(hist_breaks, safe_max)
+}
+
+# Create histogram for all data
+hist_all <- hist(pm25_filtered, breaks = hist_breaks, plot = FALSE)
+hist_percent_all <- hist_all$counts / sum(hist_all$counts) * 100
+
+# Create histograms for each group
+hist_clean <- hist(pm25_clean, breaks = hist_breaks, plot = FALSE)
+hist_percent_clean <- hist_clean$counts / sum(hist_clean$counts) * 100
+
+hist_Conventional <- hist(pm25_Conventional, breaks = hist_breaks, plot = FALSE)
+hist_percent_Conventional <- hist_Conventional$counts / sum(hist_Conventional$counts) * 100
+
+hist_Unclean <- hist(pm25_Unclean, breaks = hist_breaks, plot = FALSE)
+hist_percent_Unclean <- hist_Unclean$counts / sum(hist_Unclean$counts) * 100
+
+# Determine Y-axis maximum
+y_max_hist <- max(c(hist_percent_all, hist_percent_clean, hist_percent_Conventional, hist_percent_Unclean), na.rm = TRUE) * 1.2
+
+# Manually draw bar chart
+plot(1, 1, type = "n", 
+     xlim = c(x_min, x_max), 
+     ylim = c(0, y_max_hist), 
+     xlab = "", ylab = "", axes = FALSE)
+
+# Calculate mean PM2.5 for each fuel group
+pm25_mean_clean <- mean(pm25_clean, na.rm = TRUE)
+pm25_mean_Conventional <- mean(pm25_Conventional, na.rm = TRUE)
+pm25_mean_Unclean <- mean(pm25_Unclean, na.rm = TRUE)
+
+# Add background and histogram outlines
+usr <- par("usr")
+rect(usr[1], usr[3], usr[2], usr[4], col = "white", border = NA)
+
+# Draw overall distribution outline
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_all, 
+      col = "gray50", lwd = 1.5)
+
+# Draw distribution outlines for each fuel group
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_clean, 
+      col = clean_color, lwd = 2)
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_Conventional, 
+      col = Conventional_color, lwd = 2, lty = 2)
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_Unclean, 
+      col = Unclean_color, lwd = 2, lty = 4)
+
+# Add air quality standard lines
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Add mean lines for each group
+abline(v = pm25_mean_clean, col = clean_color, lty = 1, lwd = 1.5)
+abline(v = pm25_mean_Conventional, col = Conventional_color, lty = 2, lwd = 1.5)
+abline(v = pm25_mean_Unclean, col = Unclean_color, lty = 4, lwd = 1.5)
+
+# Add X axis
+axis(1, at = x_breaks, labels = x_breaks, col.axis = text_color, col = "gray70")
+mtext("PM2.5 Concentration (μg/m³)", side = 1, line = 3, cex = 1.2, col = text_color)
+
+# Add Y axis - modified label with line break as requested
+y_ticks <- pretty(c(0, y_max_hist), n = 5)
+axis(2, at = y_ticks, labels = paste0(format(y_ticks, digits = 1), "%"), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Sample Distribution\nFrequency (%)", side = 2, line = 2.8, cex = 1.2, col = text_color)
+
+# Add mean annotations with adjusted positions to avoid overlap
+text_y_pos <- y_max_hist * c(0.95, 0.85, 0.75)
+text(pm25_mean_clean, text_y_pos[1], 
+     sprintf("Clean Fuel Mean: %.1f", pm25_mean_clean), 
+     cex = 0.9, col = clean_color, pos = 4)
+text(pm25_mean_Conventional, text_y_pos[2], 
+     sprintf("Conventional Fuel Mean: %.1f", pm25_mean_Conventional), 
+     cex = 0.9, col = Conventional_color, pos = 4)
+text(pm25_mean_Unclean, text_y_pos[3], 
+     sprintf("Unclean Fuel Mean: %.1f", pm25_mean_Unclean), 
+     cex = 0.9, col = Unclean_color, pos = 4)
+
+# Add bottom legend
+legend("topright", 
+       legend = c("Overall Distribution", "Clean Fuel Distribution", "Conventional Fuel Distribution", "Unclean Fuel Distribution"),
+       col = c("gray50", clean_color, Conventional_color, Unclean_color),
+       lty = c(1, 1, 2, 4),
+       lwd = c(1.5, 2, 2, 2),
+       bg = add.alpha("white", 0.85),
+       box.col = "gray80", 
+       cex = 0.85, 
+       text.col = text_color)
+
+# Add border
+box(col = "gray70")
+
+dev.off()
+
+################################
+#### Create Fuel Type Difference Test Table
+################################
+
+# Calculate differences in PM2.5 effects between fuel groups
+diff_Conventional_clean <- pm25_effect_Conventional - pm25_effect_clean
+diff_Unclean_clean <- pm25_effect_Unclean - pm25_effect_clean
+diff_Unclean_Conventional <- pm25_effect_Unclean - pm25_effect_Conventional
+
+# Calculate standard errors of the differences
+# Var(a-b) = Var(a) + Var(b) - 2*Cov(a,b)
+# For Conventional - clean, this is the standard error of the interaction term
+se_diff_Conventional_clean <- summary_interaction$coefficients["PM2.5:cookingfuelConventional", "Cluster s.e."]
+se_diff_Unclean_clean <- summary_interaction$coefficients["PM2.5:cookingfuelUnclean", "Cluster s.e."]
+
+# Calculate standard error for Unclean - Conventional considering covariance
+var_diff_Unclean_Conventional <- var_Unclean_int + var_Conventional_int - 
+  2 * vcov_matrix["PM2.5:cookingfuelUnclean", "PM2.5:cookingfuelConventional"]
+se_diff_Unclean_Conventional <- sqrt(var_diff_Unclean_Conventional)
+
+# Calculate Z-values and P-values
+z_Conventional_clean <- diff_Conventional_clean / se_diff_Conventional_clean
+z_Unclean_clean <- diff_Unclean_clean / se_diff_Unclean_clean
+z_Unclean_Conventional <- diff_Unclean_Conventional / se_diff_Unclean_Conventional
+
+p_Conventional_clean <- 2 * pnorm(-abs(z_Conventional_clean))
+p_Unclean_clean <- 2 * pnorm(-abs(z_Unclean_clean))
+p_Unclean_Conventional <- 2 * pnorm(-abs(z_Unclean_Conventional))
+
+# Create difference test results table
+diff_table <- data.frame(
+  Comparison = c("Conventional vs Clean", "Unclean vs Clean", "Unclean vs Conventional"),
+  Difference = c(diff_Conventional_clean, diff_Unclean_clean, diff_Unclean_Conventional),
+  SE = c(se_diff_Conventional_clean, se_diff_Unclean_clean, se_diff_Unclean_Conventional),
+  Z_value = c(z_Conventional_clean, z_Unclean_clean, z_Unclean_Conventional),
+  P_value = c(p_Conventional_clean, p_Unclean_clean, p_Unclean_Conventional)
+)
+
+# Save difference test results
+write.csv(diff_table, "C:/Users/DELL/Desktop/pic/PM25_CookingFuel_Differences.csv", row.names = FALSE)
+
+# Print difference test results
+print("PM2.5 Effect Difference Test Results Between Fuel Groups:")
+print(diff_table)
+
+################################
+#### Summarize Effects at Different PM2.5 Levels
+################################
+
+# Select specific PM2.5 levels for effect comparison
+pm25_levels <- c(25, 50, 100)  # Changed from 35, 75 to 25, 50
+effects_at_levels <- data.frame(
+  PM25_Level = pm25_levels,
+  Clean_Effect = pm25_effect_clean * pm25_levels,
+  Conventional_Effect = pm25_effect_Conventional * pm25_levels,
+  Unclean_Effect = pm25_effect_Unclean * pm25_levels
+)
+
+# Calculate relative risk increase percentage
+effects_at_levels$Clean_Percent <- effects_at_levels$Clean_Effect * 100
+effects_at_levels$Conventional_Percent <- effects_at_levels$Conventional_Effect * 100
+effects_at_levels$Unclean_Percent <- effects_at_levels$Unclean_Effect * 100
+
+# Save effects at different PM2.5 levels table
+write.csv(effects_at_levels, "C:/Users/DELL/Desktop/pic/PM25_Effects_By_Level.csv", row.names = FALSE)
+
+# Print results
+print("Mortality Effects at Different PM2.5 Levels for Each Fuel Group:")
+print(effects_at_levels)
+
+# Create a more aesthetically pleasing summary table with main results
+# Including PM2.5 effects, sample sizes, means, etc.
+summary_table <- data.frame(
+  Fuel_Type = c("Clean Fuel", "Conventional Fuel", "Unclean Fuel"),
+  Sample_Size = c(length(pm25_clean), length(pm25_Conventional), length(pm25_Unclean)),
+  PM25_Mean = c(pm25_mean_clean, pm25_mean_Conventional, pm25_mean_Unclean),
+  PM25_Effect_Coefficient = c(pm25_effect_clean, pm25_effect_Conventional, pm25_effect_Unclean),
+  Standard_Error = c(se_clean, se_Conventional, se_Unclean),
+  P_Value = c(
+    summary_interaction$coefficients["PM2.5", "Pr(>|t|)"],
+    pnorm(-abs(z_Conventional_clean)) * 2,  # Calculate if Conventional fuel group effect is significant
+    pnorm(-abs(z_Unclean_clean)) * 2      # Calculate if Unclean fuel group effect is significant
+  ),
+  Ratio_to_Clean_Fuel = c(1, 
+                          pm25_effect_Conventional / pm25_effect_clean, 
+                          pm25_effect_Unclean / pm25_effect_clean)
+)
+
+# Beautify table value formats
+summary_table$PM25_Mean <- round(summary_table$PM25_Mean, 1)
+summary_table$PM25_Effect_Coefficient <- format(summary_table$PM25_Effect_Coefficient, scientific = FALSE, digits = 5)
+summary_table$Standard_Error <- format(summary_table$Standard_Error, scientific = FALSE, digits = 5)
+summary_table$P_Value <- format(summary_table$P_Value, digits = 3)
+summary_table$Ratio_to_Clean_Fuel <- round(summary_table$Ratio_to_Clean_Fuel, 2)
+
+# Save beautified table
+write.csv(summary_table, "C:/Users/DELL/Desktop/pic/PM25_CookingFuel_Summary.csv", row.names = FALSE)
+
+# Create an additional more concise table focusing on effects at 25μg/m³ and 50μg/m³
+clean_names <- c("Clean Fuel", "Conventional Fuel", "Unclean Fuel")
+simple_table <- data.frame(
+  Fuel_Type = clean_names,
+  PM25_Mean = c(pm25_mean_clean, pm25_mean_Conventional, pm25_mean_Unclean),
+  Effect_Per_1unit_PM25 = c(pm25_effect_clean, pm25_effect_Conventional, pm25_effect_Unclean),
+  Mortality_Increase_at_25ug_per_1000 = c(
+    pm25_effect_clean * 25 * 1000, 
+    pm25_effect_Conventional * 25 * 1000, 
+    pm25_effect_Unclean * 25 * 1000
+  ),
+  Mortality_Increase_at_50ug_per_1000 = c(
+    pm25_effect_clean * 50 * 1000, 
+    pm25_effect_Conventional * 50 * 1000, 
+    pm25_effect_Unclean * 50 * 1000
+  )
+)
+
+# Beautify simple table format
+simple_table$PM25_Mean <- round(simple_table$PM25_Mean, 1)
+simple_table$Effect_Per_1unit_PM25 <- format(simple_table$Effect_Per_1unit_PM25, scientific = FALSE, digits = 5)
+simple_table$Mortality_Increase_at_25ug_per_1000 <- round(simple_table$Mortality_Increase_at_25ug_per_1000, 2)
+simple_table$Mortality_Increase_at_50ug_per_1000 <- round(simple_table$Mortality_Increase_at_50ug_per_1000, 2)
+
+# Save simple table
+write.csv(simple_table, "C:/Users/DELL/Desktop/pic/PM25_CookingFuel_SimpleTable.csv", row.names = FALSE)
+
+#### Analysis Complete ####
+cat("\nAnalysis complete! All results have been saved to C:/Users/DELL/Desktop/pic/ directory\n")

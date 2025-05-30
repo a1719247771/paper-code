@@ -1,0 +1,411 @@
+source("scripts/helper_functions.R")
+data <- readxl::read_excel("C:/Users/DELL/Desktop/f11.xlsx")
+
+# Define helper function
+add.alpha <- function(col, alpha=1) {
+  apply(sapply(col, col2rgb)/255, 2, 
+        function(x) rgb(x[1], x[2], x[3], alpha))
+}
+
+# Create output directory (if doesn't exist)
+dir.create("C:/Users/DELL/Desktop/pic", showWarnings = FALSE)
+
+# Define model components - unchanging
+regression_controls <- "Education + Birthorder + Twin + hospital + Sex + Hurt + Placeresidence + RH + ozone + Tem + Age + NDVI + Wealth + Water + cookingfuel+Toilet"  # Remove cookingfuel as control variable
+regression_fixed_effects <- "Name + fseason + ftime"
+regression_var_cluster <- "floc"
+
+# Ensure electricity is a factor variable for easier interpretation
+data$electricity <- factor(data$electricity, 
+                           levels = c(0, 1), 
+                           labels = c("No Electricity", "With Electricity"))
+
+# Print frequency table for electricity
+cat("Electricity access distribution:\n")
+print(table(data$electricity))
+
+# Determine PM2.5 actual range
+pm25_min <- min(data$PM2.5, na.rm = TRUE)
+pm25_max <- max(data$PM2.5, na.rm = TRUE)
+pm25_mean <- mean(data$PM2.5, na.rm = TRUE)
+print(paste("PM2.5 range:", pm25_min, "to", pm25_max, "mean:", pm25_mean))
+
+# Determine actual PM2.5 quantile range (1% to 99%)
+pm25_q01 <- quantile(data$PM2.5, 0.01, na.rm = TRUE)
+pm25_q99 <- quantile(data$PM2.5, 0.99, na.rm = TRUE)
+print(paste("PM2.5 quantile range (1%-99%):", pm25_q01, "to", pm25_q99))
+
+# Set x-axis range variables
+x_min <- floor(pm25_q01)
+x_max <- ceiling(pm25_q99)
+x_breaks <- seq(x_min, x_max, by = 20)
+
+# Create support range based on actual range
+pm25_support <- seq(x_min, x_max, length.out = 100)
+
+################################
+#### Interaction Effect Analysis
+################################
+
+# Create interaction term between PM2.5 and electricity access
+# Using No Electricity (0) as reference group
+equation_interaction <- as.formula(paste(
+  "Y ~ PM2.5 + electricity + PM2.5:electricity + ", 
+  regression_controls, "|", regression_fixed_effects, "| 0 |", regression_var_cluster, sep = ""))
+
+# Run interaction effect model
+interaction_model <- lfe::felm(equation_interaction, data = data)
+summary_interaction <- summary(interaction_model)
+print(summary_interaction)
+
+# Save results to file
+sink("C:/Users/DELL/Desktop/pic/PM25_Electricity_Interaction_Results.txt")
+print("PM2.5 and Electricity access Interaction Model Results:")
+print(summary_interaction)
+sink()
+
+# Extract coefficients for prediction
+# Base effect (PM2.5 effect for No Electricity group)
+base_pm25_effect <- coef(interaction_model)["PM2.5"]
+# Additional PM2.5 effect for With Electricity group relative to No Electricity
+electricity_interaction <- coef(interaction_model)["PM2.5:electricityWith Electricity"]
+
+# Calculate PM2.5 effects for different electricity access groups
+pm25_effect_no_electricity <- base_pm25_effect
+pm25_effect_with_electricity <- base_pm25_effect + electricity_interaction
+
+# Get standard errors and covariance for confidence interval calculation
+vcov_matrix <- vcov(interaction_model)
+
+# Calculate standard errors for each group
+# No Electricity group - directly from PM2.5 standard error
+se_no_electricity <- summary_interaction$coefficients["PM2.5", "Cluster s.e."]
+
+# Calculate standard error for With Electricity group (considering covariance)
+# Var(a+b) = Var(a) + Var(b) + 2*Cov(a,b)
+var_pm25 <- se_no_electricity^2
+var_electricity_int <- summary_interaction$coefficients["PM2.5:electricityWith Electricity", "Cluster s.e."]^2
+cov_pm25_electricity <- vcov_matrix["PM2.5", "PM2.5:electricityWith Electricity"]
+se_with_electricity <- sqrt(var_pm25 + var_electricity_int + 2*cov_pm25_electricity)
+
+# Generate predicted values and confidence intervals for different electricity access groups
+# No Electricity group
+predicted_no_electricity <- pm25_effect_no_electricity * pm25_support
+ci_low_no_electricity <- predicted_no_electricity - 1.96 * se_no_electricity * pm25_support
+ci_high_no_electricity <- predicted_no_electricity + 1.96 * se_no_electricity * pm25_support
+
+# With Electricity group
+predicted_with_electricity <- pm25_effect_with_electricity * pm25_support
+ci_low_with_electricity <- predicted_with_electricity - 1.96 * se_with_electricity * pm25_support
+ci_high_with_electricity <- predicted_with_electricity + 1.96 * se_with_electricity * pm25_support
+
+################################
+#### Create PM2.5 and Electricity Interaction Chart
+################################
+
+# Set color scheme
+no_electricity_color <- "#ee7766"   # Red - No electricity
+with_electricity_color <- "#3377bb" # Blue - With electricity
+grid_color <- "#e6e6e6"             # Grid line color
+text_color <- "#333333"             # Text color
+
+# Air quality standard colors
+excellent_color <- "#8ecae6"  # Excellent - Light blue
+good_color <- "#219ebc"       # Good - Dark blue
+polluted_color <- "#ffb5c2"   # Polluted - Pink
+
+# Create PNG image
+png(filename = "C:/Users/DELL/Desktop/pic/PM25_Electricity_Interaction.png", 
+    width = 10, height = 8, units = "in", res = 300)
+
+# Set layout - Interaction effects on top, PM2.5 distribution below
+layout(matrix(c(1,2), nrow = 2, byrow = TRUE), heights = c(0.618, 0.382))
+
+# Set plot parameters - upper graph
+par(mar = c(0, 5, 4, 2), cex.axis = 1.1, cex.lab = 1.2, family = "sans")
+
+# Determine Y-axis range - combine all predicted values and add margin
+y_values <- c(ci_low_no_electricity, ci_high_no_electricity, 
+              ci_low_with_electricity, ci_high_with_electricity)
+y_min <- min(0, min(y_values) * 1.05)  # Ensure 0 is included
+y_max <- max(y_values) * 1.1
+
+# Upper graph: Impact of PM2.5 & electricity interaction on infant mortality
+plot(pm25_support, predicted_no_electricity, type = 'n', 
+     ylim = c(y_min, y_max),
+     xlim = c(x_min, x_max),
+     xlab = "", ylab = "", axes = FALSE, 
+     main = "") # Empty title, will add manually later
+
+# Add air quality region background
+excellent_limit <- 25  # Changed from 35 to 25
+good_limit <- 50       # Changed from 75 to 50
+
+rect(par("usr")[1], par("usr")[3], excellent_limit, par("usr")[4], 
+     col = add.alpha("#e6f2ff", 0.3), border = NA)
+rect(excellent_limit, par("usr")[3], good_limit, par("usr")[4], 
+     col = add.alpha("#f0f7ff", 0.2), border = NA)
+rect(good_limit, par("usr")[3], par("usr")[2], par("usr")[4], 
+     col = add.alpha("#fff0f5", 0.2), border = NA)
+
+# Add grid lines
+grid_y <- pretty(c(y_min, y_max), n = 6)
+abline(h = grid_y, col = grid_color, lty = 3, lwd = 0.8)
+abline(v = x_breaks, col = grid_color, lty = 3, lwd = 0.8)
+
+# Add reference lines
+abline(h = 0, col = "gray40", lty = 2, lwd = 1.2)
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Plot confidence intervals and lines for each electricity group
+
+# No electricity group
+polygon(c(pm25_support, rev(pm25_support)), 
+        c(ci_low_no_electricity, rev(ci_high_no_electricity)), 
+        col = add.alpha(no_electricity_color, 0.15), border = NA)
+lines(pm25_support, predicted_no_electricity, lwd = 2.5, col = no_electricity_color)
+
+# With electricity group
+polygon(c(pm25_support, rev(pm25_support)), 
+        c(ci_low_with_electricity, rev(ci_high_with_electricity)), 
+        col = add.alpha(with_electricity_color, 0.15), border = NA)
+lines(pm25_support, predicted_with_electricity, lwd = 2.5, col = with_electricity_color, lty = 2)
+
+# Add Y axis
+axis(2, at = grid_y, 
+     labels = format(grid_y * 1000, scientific = FALSE, trim = TRUE), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Infant Mortality Change (per 1,000 newborns)", side = 2, line = 3.5, cex = 1.2, col = text_color)
+
+# Add title
+mtext("Impact of PM2.5 and Electricity Access on Infant Mortality", side = 3, line = 1, cex = 1.5, font = 2, col = text_color)
+
+# Legend - removed air quality categories as requested
+legend_x <- "topleft"  # can be "topleft", "topright", "bottomleft", "bottomright"
+legend_items <- c("No Electricity", "With Electricity")
+legend_colors <- c(no_electricity_color, with_electricity_color)
+legend_lty <- c(1, 2)
+legend_lwd <- c(2.5, 2.5)
+
+# Add legend
+legend(legend_x, legend = legend_items, 
+       col = legend_colors, lty = legend_lty, lwd = legend_lwd,
+       bg = add.alpha("white", 0.85), # Add background transparency
+       box.col = "gray80", 
+       cex = 0.9, 
+       text.col = text_color,
+       pt.cex = 1.2,     # Increase legend point size
+       seg.len = 1.5,    # Increase legend line segment length
+       x.intersp = 0.8,  # Adjust horizontal spacing
+       y.intersp = 1.2)  # Adjust vertical spacing
+
+# Lower graph: PM2.5 frequency distribution histogram
+par(mar = c(4.5, 5, 0.5, 2))
+
+# Filter PM2.5 data within valid range
+pm25_filtered <- data$PM2.5[data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+
+# PM2.5 distribution by electricity access
+pm25_no_electricity <- data$PM2.5[data$electricity == "No Electricity" & data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+pm25_with_electricity <- data$PM2.5[data$electricity == "With Electricity" & data$PM2.5 >= pm25_q01 & data$PM2.5 <= pm25_q99]
+
+# Find actual min and max of all data
+actual_min <- min(pm25_filtered, na.rm = TRUE)
+actual_max <- max(pm25_filtered, na.rm = TRUE)
+
+# Create histogram intervals
+buffer <- 0.001
+safe_min <- floor(actual_min - buffer)
+safe_max <- ceiling(actual_max + buffer)
+hist_breaks <- c(seq(safe_min, safe_max, by = 2))
+if (max(hist_breaks) < safe_max) {
+  hist_breaks <- c(hist_breaks, safe_max)
+}
+
+# Create histogram for all data
+hist_all <- hist(pm25_filtered, breaks = hist_breaks, plot = FALSE)
+hist_percent_all <- hist_all$counts / sum(hist_all$counts) * 100
+
+# Create histograms for each group
+hist_no_electricity <- hist(pm25_no_electricity, breaks = hist_breaks, plot = FALSE)
+hist_percent_no_electricity <- hist_no_electricity$counts / sum(hist_no_electricity$counts) * 100
+
+hist_with_electricity <- hist(pm25_with_electricity, breaks = hist_breaks, plot = FALSE)
+hist_percent_with_electricity <- hist_with_electricity$counts / sum(hist_with_electricity$counts) * 100
+
+# Determine Y-axis maximum
+y_max_hist <- max(c(hist_percent_all, hist_percent_no_electricity, hist_percent_with_electricity), na.rm = TRUE) * 1.2
+
+# Manually draw bar chart
+plot(1, 1, type = "n", 
+     xlim = c(x_min, x_max), 
+     ylim = c(0, y_max_hist), 
+     xlab = "", ylab = "", axes = FALSE)
+
+# Calculate mean PM2.5 for each electricity group
+pm25_mean_no_electricity <- mean(pm25_no_electricity, na.rm = TRUE)
+pm25_mean_with_electricity <- mean(pm25_with_electricity, na.rm = TRUE)
+
+# Add background and histogram outlines
+usr <- par("usr")
+rect(usr[1], usr[3], usr[2], usr[4], col = "white", border = NA)
+
+# Draw overall distribution outline
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_all, 
+      col = "gray50", lwd = 1.5)
+
+# Draw distribution outlines for each electricity access group
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_no_electricity, 
+      col = no_electricity_color, lwd = 2)
+lines(hist_breaks[-length(hist_breaks)] + diff(hist_breaks)/2, hist_percent_with_electricity, 
+      col = with_electricity_color, lwd = 2, lty = 2)
+
+# Add air quality standard lines
+abline(v = excellent_limit, col = excellent_color, lty = 2, lwd = 1.5)
+abline(v = good_limit, col = polluted_color, lty = 2, lwd = 1.5)
+
+# Add mean lines for each group
+abline(v = pm25_mean_no_electricity, col = no_electricity_color, lty = 1, lwd = 1.5)
+abline(v = pm25_mean_with_electricity, col = with_electricity_color, lty = 2, lwd = 1.5)
+
+# Add X axis
+axis(1, at = x_breaks, labels = x_breaks, col.axis = text_color, col = "gray70")
+mtext("PM2.5 Concentration (μg/m³)", side = 1, line = 3, cex = 1.2, col = text_color)
+
+# Add Y axis
+y_ticks <- pretty(c(0, y_max_hist), n = 5)
+axis(2, at = y_ticks, labels = paste0(format(y_ticks, digits = 1), "%"), 
+     las = 1, col.axis = text_color, col = "gray70")
+mtext("Sample Distribution\nFrequency (%)", side = 2, line = 2.8, cex = 1.2, col = text_color)
+
+# Add mean annotations
+text_y_pos <- y_max_hist * c(0.95, 0.85)
+text(pm25_mean_no_electricity, text_y_pos[1], 
+     sprintf("No Electricity Mean: %.1f", pm25_mean_no_electricity), 
+     cex = 0.9, col = no_electricity_color, pos = 4)
+text(pm25_mean_with_electricity, text_y_pos[2], 
+     sprintf("With Electricity Mean: %.1f", pm25_mean_with_electricity), 
+     cex = 0.9, col = with_electricity_color, pos = 4)
+
+# Add bottom legend
+legend("topright", 
+       legend = c("Overall Distribution", "No Electricity Distribution", "With Electricity Distribution"),
+       col = c("gray50", no_electricity_color, with_electricity_color),
+       lty = c(1, 1, 2),
+       lwd = c(1.5, 2, 2),
+       bg = add.alpha("white", 0.85),
+       box.col = "gray80", 
+       cex = 0.85, 
+       text.col = text_color)
+
+# Add border
+box(col = "gray70")
+
+dev.off()
+
+################################
+#### Create Electricity access Difference Test Table
+################################
+
+# Calculate difference in PM2.5 effects between electricity groups
+diff_with_no <- pm25_effect_with_electricity - pm25_effect_no_electricity
+
+# Calculate standard error of the difference
+# For with - no, this is the standard error of the interaction term
+se_diff_with_no <- summary_interaction$coefficients["PM2.5:electricityWith Electricity", "Cluster s.e."]
+
+# Calculate Z-value and P-value
+z_with_no <- diff_with_no / se_diff_with_no
+p_with_no <- 2 * pnorm(-abs(z_with_no))
+
+# Create difference test results table
+diff_table <- data.frame(
+  Comparison = c("With Electricity vs No Electricity"),
+  Difference = c(diff_with_no),
+  SE = c(se_diff_with_no),
+  Z_value = c(z_with_no),
+  P_value = c(p_with_no)
+)
+
+# Save difference test results
+write.csv(diff_table, "C:/Users/DELL/Desktop/pic/PM25_Electricity_Differences.csv", row.names = FALSE)
+
+# Print difference test results
+print("PM2.5 Effect Difference Test Results Between Electricity Groups:")
+print(diff_table)
+
+################################
+#### Summarize Effects at Different PM2.5 Levels
+################################
+
+# Select specific PM2.5 levels for effect comparison
+pm25_levels <- c(25, 50, 100)  # Changed from 35/75 to 25/50
+effects_at_levels <- data.frame(
+  PM25_Level = pm25_levels,
+  No_Electricity_Effect = pm25_effect_no_electricity * pm25_levels,
+  With_Electricity_Effect = pm25_effect_with_electricity * pm25_levels
+)
+
+# Calculate relative risk increase percentage
+effects_at_levels$No_Electricity_Percent <- effects_at_levels$No_Electricity_Effect * 100
+effects_at_levels$With_Electricity_Percent <- effects_at_levels$With_Electricity_Effect * 100
+
+# Save effects at different PM2.5 levels table
+write.csv(effects_at_levels, "C:/Users/DELL/Desktop/pic/PM25_Electricity_Effects_By_Level.csv", row.names = FALSE)
+
+# Print results
+print("Mortality Effects at Different PM2.5 Levels for Each Electricity Group:")
+print(effects_at_levels)
+
+# Create a more aesthetically pleasing summary table with main results
+summary_table <- data.frame(
+  Electricity_access = c("No Electricity", "With Electricity"),
+  Sample_Size = c(length(pm25_no_electricity), length(pm25_with_electricity)),
+  PM25_Mean = c(pm25_mean_no_electricity, pm25_mean_with_electricity),
+  PM25_Effect_Coefficient = c(pm25_effect_no_electricity, pm25_effect_with_electricity),
+  Standard_Error = c(se_no_electricity, se_with_electricity),
+  P_Value = c(
+    summary_interaction$coefficients["PM2.5", "Pr(>|t|)"],
+    pnorm(-abs(z_with_no)) * 2  # Calculate if the effect in electricity group is significant
+  ),
+  Ratio_to_No_Electricity = c(1, pm25_effect_with_electricity / pm25_effect_no_electricity)
+)
+
+# Beautify table value formats
+summary_table$PM25_Mean <- round(summary_table$PM25_Mean, 1)
+summary_table$PM25_Effect_Coefficient <- format(summary_table$PM25_Effect_Coefficient, scientific = FALSE, digits = 5)
+summary_table$Standard_Error <- format(summary_table$Standard_Error, scientific = FALSE, digits = 5)
+summary_table$P_Value <- format(summary_table$P_Value, digits = 3)
+summary_table$Ratio_to_No_Electricity <- round(summary_table$Ratio_to_No_Electricity, 2)
+
+# Save beautified table
+write.csv(summary_table, "C:/Users/DELL/Desktop/pic/PM25_Electricity_Summary.csv", row.names = FALSE)
+
+# Create an additional more concise table focusing on effects at 25μg/m³ and 50μg/m³
+electricity_names <- c("No Electricity", "With Electricity")
+simple_table <- data.frame(
+  Electricity_access = electricity_names,
+  PM25_Mean = c(pm25_mean_no_electricity, pm25_mean_with_electricity),
+  Effect_Per_1unit_PM25_Increase = c(pm25_effect_no_electricity, pm25_effect_with_electricity),
+  Mortality_Increase_at_25ug_per_1000 = c(
+    pm25_effect_no_electricity * 25 * 1000, 
+    pm25_effect_with_electricity * 25 * 1000
+  ),
+  Mortality_Increase_at_50ug_per_1000 = c(
+    pm25_effect_no_electricity * 50 * 1000, 
+    pm25_effect_with_electricity * 50 * 1000
+  )
+)
+
+# Beautify simple table format
+simple_table$PM25_Mean <- round(simple_table$PM25_Mean, 1)
+simple_table$Effect_Per_1unit_PM25_Increase <- format(simple_table$Effect_Per_1unit_PM25_Increase, scientific = FALSE, digits = 5)
+simple_table$Mortality_Increase_at_25ug_per_1000 <- round(simple_table$Mortality_Increase_at_25ug_per_1000, 2)
+simple_table$Mortality_Increase_at_50ug_per_1000 <- round(simple_table$Mortality_Increase_at_50ug_per_1000, 2)
+
+# Save simple table
+write.csv(simple_table, "C:/Users/DELL/Desktop/pic/PM25_Electricity_SimpleTable.csv", row.names = FALSE)
+
+#### Analysis Complete ####
+cat("\nAnalysis complete! All results have been saved to C:/Users/DELL/Desktop/pic/ directory\n")

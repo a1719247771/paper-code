@@ -1,0 +1,181 @@
+# Load necessary packages
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+# library(stringr) # stringr is loaded but not explicitly used in this plotting script
+library(forcats) # For factor manipulation
+library(scales)  # For scales::comma
+
+# --- 1. 指定输出目录并确保其存在 ---
+output_dir <- "C:/Users/DELL/Desktop/pic2" # 您指定的文件夹路径
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  cat(sprintf("Directory created: %s\n", output_dir))
+} else {
+  cat(sprintf("Directory already exists: %s\n", output_dir))
+}
+
+# --- 2. 数据准备 ---
+# Original data text (ensure correct copy-pasting)
+data_text <- "
+Entity,Low_Scenario,Moderate_Scenario,High_Scenario
+Albania,0.008029988,0.644068606,1.272077236
+Angola,6.549848332,396.4078083,779.7159199
+Armenia,0.023784994,0.236810688,0.426051387
+Bangladesh,1177.710819,3740.525622,5125.629606
+Benin,55.68432947,808.98385,1506.599041
+Burkina Faso,1365.353863,3388.603251,4046.498775
+Burundi,16.93128556,140.9274398,247.9923085
+Cambodia,45.93841668,113.9909443,136.1050552
+Cameroon,30.82651532,1077.19234,2092.731648
+Chad,40.15508649,1726.997906,3373.685638
+Cote d'Ivoire,1128.006762,2799.116062,3342.2186
+Democratic Republic of Congo,43.01481259,2675.518745,5265.007866
+Dominican Republic,0,8.053729786,16.10745957
+Egypt,0,0,0
+Ethiopia,126.7585908,1462.475055,2671.432928
+Gabon,0.018326607,10.83004889,21.62344456
+Gambia,0.3918081,104.9256551,209.0676939
+Ghana,825.8078746,2049.148103,2446.680457
+Guatemala,0.103829184,32.11579226,64.02392614
+Guinea,27.39737789,680.5431354,1306.291515
+Haiti,0.22662657,85.53115211,170.6090511
+India,3778.234829,18226.21697,28895.96428
+Jordan,0,0,0
+Kenya,1.025238517,132.4485286,262.8465802
+Lesotho,1.720920749,7.126463723,10.81108595
+Liberia,0,193.338464,386.6769279
+Madagascar,4.036661233,41.35139903,74.6294756
+Malawi,0.75782776,45.67424436,89.8328332
+Mali,33.6554344,1779.730386,3492.149904
+Mauritania,4.635846948,190.4519704,371.632247
+Mozambique,173.7476203,431.1997668,514.9042929
+Myanmar,20.33975513,399.77738,758.8752497
+Namibia,0.063291147,9.070121039,18.01365978
+Niger,443.9066143,3396.907336,5906.001443
+Nigeria,799.0542253,20487.96266,39377.81687
+Pakistan,1236.534783,8347.256613,14221.44366
+Philippines,165.2708248,410.5566408,490.571632
+Rwanda,27.81018408,129.5800335,203.5396988
+Senegal,44.41041536,287.2299863,485.6391419
+Sierra Leone,0,530.8965893,1061.793179
+South Africa,1.858232355,32.77740516,61.83834561
+Tajikistan,20.70280897,67.36622192,93.3268259
+East Timor,0.003043306,6.870519637,13.73495266
+Togo,0.744534662,298.3550054,595.2209414
+Uganda,0,378.087674,751.9654573
+Tanzania,246.863516,612.9929032,732.2587743
+Zambia,0.804865331,85.84599668,170.0822627
+Zimbabwe,0.214169679,33.53684075,66.64534214
+"
+
+# Read the data
+df_raw <- read.csv(text = data_text, check.names = FALSE)
+colnames(df_raw) <- c("Country", "Low", "Moderate", "High")
+
+# Convert data from wide to long format for plot1
+df_long <- df_raw %>%
+  pivot_longer(cols = c("Low", "Moderate", "High"),
+               names_to = "Scenario",
+               values_to = "Deaths_Averted")
+
+# Convert Scenario to an ordered factor
+df_long$Scenario <- factor(df_long$Scenario, levels = c("Low", "Moderate", "High"))
+
+# Calculate country order based on "High" scenario for consistent sorting
+# This order is: highest "High" value first
+country_order_high_scenario <- df_raw %>%
+  arrange(desc(High)) %>%
+  pull(Country)
+
+# Apply sorted order to Country factor for plot1
+# rev() is used because ggplot plots Y-axis factors from bottom up;
+# rev() makes highest appear at the top.
+df_long$Country <- factor(df_long$Country, levels = rev(country_order_high_scenario))
+
+
+# --- 3. Plot 1: Connected Dot Plot ---
+plot1 <- ggplot(df_long, aes(x = Deaths_Averted, y = Country, color = Scenario, group = Country)) +
+  geom_line(color = "grey70", linewidth = 0.7) +
+  geom_point(size = 2.5, alpha = 0.9) +
+  scale_x_continuous(
+    trans = "log1p",
+    breaks = c(0, 1, 10, 100, 1000, 10000, 40000),
+    labels = scales::comma
+  ) +
+  scale_color_manual(values = c("Low" = "steelblue3", "Moderate" = "darkorange2", "High" = "firebrick3")) +
+  labs(
+    title = "Averted Infant Deaths by Country under Different Energy Transition Scenarios",
+    subtitle = "Points indicate values; lines connect scenarios for each country.\nY-axis is sorted by 'High' scenario values (descending).",
+    x = "Averted Infant Deaths (log1p transformed scale)",
+    y = "Country",
+    color = "Energy Transition Scenario"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(hjust = 0.5, face = "bold", size = rel(1.2)),
+    plot.subtitle = element_text(hjust = 0.5, size = rel(0.9)),
+    axis.text.y = element_text(size = rel(0.85)),
+    axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
+    axis.title.y = element_text(face = "bold", margin = margin(r = 10)),
+    legend.title = element_text(face = "bold")
+  )
+
+print(plot1)
+
+# --- 4. 保存 Plot 1 ---
+plot1_filename <- "plot1_connected_dots.png"
+ggsave(filename = file.path(output_dir, plot1_filename), plot = plot1, width = 12, height = 10, dpi = 300)
+cat(sprintf("Plot 1 saved as %s in %s\n", plot1_filename, output_dir))
+
+
+# --- 5. 数据准备 for Plot 2: Grouped Bar Chart (修复错误) ---
+df_long_for_bar <- df_raw %>%
+  pivot_longer(cols = c("Low", "Moderate", "High"),
+               names_to = "Scenario",
+               values_to = "Deaths_Averted") %>%
+  mutate(
+    Scenario = factor(Scenario, levels = c("Low", "Moderate", "High")),
+    # 使用预先计算好的 country_order_high_scenario 来排序 Country 因子
+    # 对于X轴，我们希望值高的在左边，所以直接用这个顺序 (不需要rev())
+    Country = factor(Country, levels = country_order_high_scenario)
+  )
+
+# --- 6. Plot 2: Grouped Bar Chart ---
+plot2 <- ggplot(df_long_for_bar, aes(x = Country, y = Deaths_Averted, fill = Scenario)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  scale_y_continuous(
+    trans = "log1p",
+    breaks = c(0, 1, 10, 100, 1000, 10000, 40000),
+    labels = scales::comma
+  ) +
+  scale_fill_manual(values = c("Low" = "steelblue3", "Moderate" = "darkorange2", "High" = "firebrick3")) +
+  labs(
+    title = "Averted Infant Deaths by Country under Different Energy Transition Scenarios",
+    subtitle = "Countries on X-axis are sorted by 'High' scenario values (descending).",
+    x = "Country",
+    y = "Averted Infant Deaths (log1p transformed scale)",
+    fill = "Energy Transition Scenario"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(hjust = 0.5, face = "bold", size = rel(1.2)),
+    plot.subtitle = element_text(hjust = 0.5, size = rel(0.9)),
+    axis.text.x = element_text(angle = 60, hjust = 1, vjust = 1, size = rel(0.80)), # 略微缩小X轴字体
+    axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
+    axis.title.y = element_text(face = "bold", margin = margin(r = 10)),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    legend.title = element_text(face = "bold")
+  )
+
+print(plot2)
+
+# --- 7. 保存 Plot 2 ---
+plot2_filename <- "plot2_grouped_bars.png"
+# 条形图可能需要更宽的尺寸以便显示所有国家标签
+ggsave(filename = file.path(output_dir, plot2_filename), plot = plot2, width = 16, height = 9, dpi = 300)
+cat(sprintf("Plot 2 saved as %s in %s\n", plot2_filename, output_dir))

@@ -1,0 +1,121 @@
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+# Create data frame for infant mortality electricity comparison - REVERSED now
+infant_elec <- data.frame(
+  Outcome = "Infant Mortality",
+  Comparison = "Without vs With Electricity", # Changed label
+  Difference = 0.0000632, # Reversed sign
+  SE = 0.000031,
+  Z_value = 2.042099782, # Reversed sign
+  P_value = 0.041141634,
+  Significant = 0.041141634 < 0.05
+)
+
+# Create data frame for infant mortality fuel comparisons
+infant_fuel <- data.frame(
+  Outcome = rep("Infant Mortality", 3),
+  Comparison = c("Conventional vs Clean", "Unclean vs Clean", "Unclean vs Conventional"),
+  Difference = c(0.0000642434903977948, 0.000197698741879214, 0.000133455251481419),
+  SE = c(0.0000310012236908616, 0.000061419907232654, 0.0000629227774561151),
+  Z_value = c(2.07228885667285, 3.21880560858463, 2.12093707361371),
+  P_value = c(0.0382385110038983, 0.00128725718455006, 0.0339270982582724),
+  Significant = c(0.0382385110038983 < 0.05, 0.00128725718455006 < 0.05, 0.0339270982582724 < 0.05)
+)
+
+# Create data frame for neonatal mortality electricity comparison - REVERSED now
+neonatal_elec <- data.frame(
+  Outcome = "Neonatal Mortality",
+  Comparison = "Without vs With Electricity", # Changed label
+  Difference = -0.00000124890614327589, # Reversed sign
+  SE = 0.0000216553711103731,
+  Z_value = -0.0576718882770684, # Reversed sign
+  P_value = 0.954009986318914,
+  Significant = 0.954009986318914 < 0.05
+)
+
+# Create data frame for neonatal mortality fuel comparisons
+neonatal_fuel <- data.frame(
+  Outcome = rep("Neonatal Mortality", 3),
+  Comparison = c("Conventional vs Clean", "Unclean vs Clean", "Unclean vs Conventional"),
+  Difference = c(0.00000450081929925332, 0.000158810990082037, 0.000154310170782783),
+  SE = c(0.0000230323684029488, 0.0000453753443755713, 0.0000457049799575011),
+  Z_value = c(0.195412786931503, 3.49994016062026, 3.3762222612562),
+  P_value = c(0.845069807051892, 0.000465362610591124, 0.00073488526670372),
+  Significant = c(0.845069807051892 < 0.05, 0.000465362610591124 < 0.05, 0.00073488526670372 < 0.05)
+)
+
+# Combine all data
+all_data <- rbind(infant_elec, infant_fuel, neonatal_elec, neonatal_fuel)
+
+# Scale the differences to make them more readable (convert to per 1000 births)
+all_data$Scaled_Difference <- all_data$Difference * 1000
+
+# Add significance level stars (*, **, ***)
+all_data$sig_stars <- ""
+all_data$sig_stars[all_data$P_value < 0.05] <- "*"
+all_data$sig_stars[all_data$P_value < 0.01] <- "**"
+all_data$sig_stars[all_data$P_value < 0.001] <- "***"
+
+# Create a more colorful and fresh color palette
+fresh_colors <- c("Infant Mortality" = "#5ec4ff", "Neonatal Mortality" = "#7bdcb5")
+
+# Create the visualization with grouping by category
+all_data <- all_data %>%
+  mutate(Group_Type = case_when(
+    Comparison == "Without vs With Electricity" ~ "Electricity Access",
+    TRUE ~ "Fuel Type"
+  ))
+
+# Set consistent order for comparisons
+all_data$Comparison <- factor(all_data$Comparison, 
+                              levels = c("Conventional vs Clean", 
+                                         "Unclean vs Clean", 
+                                         "Unclean vs Conventional",
+                                         "Without vs With Electricity"))
+
+# Create the visualization
+mortality_plot <- ggplot(all_data, aes(x = Comparison, y = Scaled_Difference, fill = Outcome)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), color = "#555555", width = 0.7, alpha = 0.9) +
+  geom_errorbar(aes(ymin = Scaled_Difference - SE*1000, ymax = Scaled_Difference + SE*1000), 
+                position = position_dodge(width = 0.9), width = 0.25, color = "#555555") +
+  geom_text(aes(label = sig_stars, y = ifelse(Scaled_Difference >= 0, 
+                                              Scaled_Difference + SE*1000 + 0.01,
+                                              Scaled_Difference - SE*1000 - 0.01)),
+            position = position_dodge(width = 0.9), 
+            vjust = ifelse(all_data$Scaled_Difference >= 0, -0.5, 1.5), 
+            size = 6) +
+  scale_fill_manual(values = fresh_colors) +
+  labs(title = "Mortality Rate Differences by Group",
+       subtitle = "* p < 0.05, ** p < 0.01, *** p < 0.001",
+       x = "",
+       y = "Difference in Mortality Rate (per 1000 births)",
+       fill = "Outcome") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14, color = "#333333"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10, color = "#666666"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5, color = "#333333", face = "bold", size = 10),
+    axis.text.y = element_text(color = "#333333"),
+    axis.title.y = element_text(color = "#333333", face = "bold"),
+    legend.title = element_text(face = "bold", color = "#333333"),
+    legend.text = element_text(color = "#333333"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "#e5e5e5"),
+    panel.background = element_rect(fill = "#ffffff"),
+    plot.background = element_rect(fill = "#ffffff")
+  )
+
+# Save the plot to the desktop with high resolution
+ggsave("C:/Users/DELL/Desktop/Mortality_Rate_Differences.png", 
+       plot = mortality_plot, 
+       width = 12, 
+       height = 8, 
+       dpi = 300)
+
+# Print the plot
+print(mortality_plot)

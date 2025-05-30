@@ -1,0 +1,168 @@
+# --- 0. 安装和加载必要的包 ---
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(dplyr)) install.packages("dplyr")
+if (!require(viridis)) install.packages("viridis")
+if (!require(scales)) install.packages("scales")
+if (!require(ggrepel)) install.packages("ggrepel")
+if (!require(forcats)) install.packages("forcats")
+
+library(ggplot2)
+library(dplyr)
+library(viridis)
+library(scales)
+library(ggrepel)
+library(forcats)
+
+# --- 1. 数据准备 ---
+output_dir_bubble_v5 <- "C:/Users/DELL/Desktop/pic_bubble_v5" # 请确保路径正确
+if (!dir.exists(output_dir_bubble_v5)) {
+  dir.create(output_dir_bubble_v5, recursive = TRUE)
+}
+
+data <- data.frame(
+  Country = c("Albania", "Angola", "Armenia", "Bangladesh", "Benin", "Burkina Faso",
+              "Burundi", "Cambodia", "Cameroon", "Chad", "Cote d'Ivoire",
+              "Democratic Republic of Congo", "Dominican Republic", "Egypt",
+              "Ethiopia", "Gabon", "Gambia", "Ghana", "Guatemala", "Guinea",
+              "Haiti", "India", "Jordan", "Kenya", "Lesotho", "Liberia",
+              "Madagascar", "Malawi", "Mali", "Mauritania", "Mozambique",
+              "Myanmar", "Namibia", "Niger", "Nigeria", "Pakistan",
+              "Philippines", "Rwanda", "Senegal", "Sierra Leone", "South Africa",
+              "Tajikistan", "East Timor", "Togo", "Uganda", "Tanzania",
+              "Zambia", "Zimbabwe"),
+  Deaths_Averted = c(0, 684.57, 0.01, 832.78, 938.33, 1937.76, 176.96, 19.41,
+                     1226.93, 2629.60, 876.22, 4098.83, 3.69, 7.50, 1820.71,
+                     10.78, 105.29, 461.45, 15.36, 733.61, 114.59, 1963.44,
+                     0, 162.51, 7.46, 299.47, 47.95, 69.07, 1925.05, 283.26,
+                     198.34, 396.79, 12.79, 3643.23, 22510.64, 2472.76, 37.52,
+                     96.03, 606.33, 793.47, 28.58, 2.52, 4.06, 476.61, 520.30,
+                     288.87, 123.74, 52.09)
+)
+
+# 过滤掉0值或极小值以便进行log变换和大小映射
+data_plot <- data %>%
+  filter(Deaths_Averted > 0.001) %>% # 保留非常小的值，但严格的0可能导致log问题
+  mutate(
+    Deaths_Averted_Log1p = log1p(Deaths_Averted), # log(x+1)
+    # 国家按 Deaths_Averted 排序 (升序，值小的在Y轴底部)
+    Country_Sorted = fct_reorder(Country, Deaths_Averted, .desc = FALSE),
+    Size_Transformed = sqrt(Deaths_Averted) # 大小基于原始值的平方根
+  )
+
+# 找到 Nigeria 的原始值，用于调整X轴上限
+nigeria_deaths_val <- data$Deaths_Averted[data$Country == "Nigeria"]
+min_deaths_val_plot <- min(data_plot$Deaths_Averted) # 用于X轴下限参考
+
+# 定义颜色图例的断点和标签 (基于log1p变换后的值)
+color_breaks_log1p <- log1p(c(1, 100, 1000, 5000, 20000))
+
+# 定义大小图例的断点和标签 (基于原始值，但断点对应于Size_Transformed)
+size_breaks_orig <- c(10, 100, 1000, 10000)
+size_breaks_transformed <- sqrt(size_breaks_orig) # 因为Size_Transformed是sqrt(Deaths_Averted)
+size_labels_orig <- comma(size_breaks_orig)
+
+
+# --- 2. 创建优化的气泡图 ---
+optimized_bubble_plot_v3 <- ggplot(data_plot,
+                                   aes(y = Country_Sorted,      # Y轴：排序后的国家 (小值在下)
+                                       x = Deaths_Averted,      # X轴：避免的死亡数 (将在scale中log变换)
+                                       size = Size_Transformed, # 大小：基于变换后的值
+                                       color = Deaths_Averted_Log1p)) + # 颜色：基于log1p变换的值
+  geom_point(alpha = 0.8, shape = 16) + # 使用实心圆点，alpha增加一点点
+  
+  scale_x_continuous(
+    trans = "log1p",
+    breaks = c(min_deaths_val_plot, 1, 10, 100, 1000, 5000, 10000, nigeria_deaths_val),
+    labels = function(br) {
+      val <- round(br)
+      ifelse(val == 0 & br > 0 & br < 0.5, sprintf("%.2f", br), comma(val)) # 对小值显示小数
+    },
+    # 修改：减少右侧扩展，将右边部分往左缩0.5厘米
+    # 从 mult = c(0.05, 0.15) 改为 mult = c(0.05, 0.08)
+    expand = expansion(mult = c(0.05, 0.06)), # 左侧5%，右侧8%扩展（减少了右侧扩展）
+    # 或者更精确地用 limits:
+    # limits = c(NA, nigeria_deaths_val * 1.10) # 右侧上限设为Nigeria值的1.1倍（从1.2倍减少）
+  ) +
+  
+  # *** 新增/修改的部分：调整Y轴使其顶部有更多空间 ***
+  scale_y_discrete(
+    expand = expansion(add = c(0.5, 1.5)) # 底部增加0.5个单位的空白，顶部增加1.5个单位的空白
+    # 这里的单位是基于因子水平的间距。增加顶部的1.5以给Nigeria气泡空间
+  ) +
+  
+  scale_size_area(
+    max_size = 12, # 维持之前调整的值
+    name = "Averted Deaths (Size reflects area)",
+    breaks = size_breaks_transformed,
+    labels = size_labels_orig
+  ) +
+  
+  scale_color_viridis(
+    option = "A", # "Plasma"
+    name = "Averted Deaths (Color reflects log scale)",
+    trans = "identity",
+    breaks = color_breaks_log1p,
+    labels = function(br) comma(round(expm1(br)))
+  ) +
+  
+  geom_text_repel(
+    data = subset(data_plot, Deaths_Averted > 1800 | Country %in% c("Nigeria", "India", "Pakistan", "Democratic Republic of Congo", "Chad", "Niger", "Bangladesh", "Burkina Faso", "Mali", "Ethiopia")), # 调整标记条件
+    aes(label = Country),
+    size = 3.0, # 字体大小
+    color = "black",
+    box.padding = 0.45,
+    point.padding = 0.25,
+    segment.color = 'grey50',
+    segment.size = 0.3,
+    max.overlaps = Inf, # 尽量显示
+    min.segment.length = 0, # 总是画线
+    nudge_x = 0.08, # 水平推动标签
+    direction = "y", # 优先在Y方向上避让
+    force = 2 # 增加避让力度
+  ) +
+  
+  labs(
+    title = "Averted Infant Deaths: 'Fully Electrified' Scenario",
+    subtitle = "Bubble size reflects sqrt(averted deaths), color reflects log(averted deaths + 1).\nCountries sorted by averted deaths (ascending). X-axis is on a log scale.",
+    y = "Country",
+    x = "Number of Averted Infant Deaths (log1p scale)"
+  ) +
+  
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_text(size=8, face="bold"),
+    legend.text = element_text(size=7),
+    legend.key.width = unit(1.1, "cm"),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5, color = "#2c3e50"),
+    plot.subtitle = element_text(size = 10, hjust = 0.5, color = "#34495e", margin = margin(b=15)),
+    axis.text.y = element_text(size = 10), # 修改：从7.5增加到10，让Y轴国家名称更大
+    axis.text.x = element_text(size = 8),   # X轴刻度字体
+    axis.title = element_text(size = 10, face = "bold", color = "#34495e"),
+    panel.grid.major = element_line(linetype = "dotted", color = "grey85"),
+    panel.grid.minor = element_blank()
+  ) +
+  guides(size = guide_legend(override.aes = list(color = viridis::viridis(5, option="A")[3], alpha=0.7), order = 2),
+         color = guide_colorbar(order = 1))
+
+
+print(optimized_bubble_plot_v3)
+
+# --- 3. 保存图表 ---
+optimized_bubble_filename_v3 <- "optimized_bubble_plot_averted_deaths_v3_widescreen.png" # 更新文件名
+
+# 按照你截图的宽屏比例保存 (约16:9的比例)
+ggsave(filename = file.path(output_dir_bubble_v5, optimized_bubble_filename_v3),
+       plot = optimized_bubble_plot_v3,
+       width = 16, height = 9, dpi = 300, bg = "white")
+
+# 同时保存PDF格式（高质量版本）
+optimized_bubble_filename_pdf <- "optimized_bubble_plot_averted_deaths_v3_widescreen.pdf"
+ggsave(filename = file.path(output_dir_bubble_v5, optimized_bubble_filename_pdf),
+       plot = optimized_bubble_plot_v3,
+       width = 16, height = 9, dpi = 300, bg = "white")
+
+cat(sprintf("Widescreen bubble chart saved as PNG: %s\n", optimized_bubble_filename_v3))
+cat(sprintf("Widescreen bubble chart saved as PDF: %s\n", optimized_bubble_filename_pdf))
+cat(sprintf("Files saved in: %s\n", output_dir_bubble_v5))
